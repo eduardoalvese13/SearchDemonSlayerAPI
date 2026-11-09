@@ -1,0 +1,101 @@
+@page "/"
+@inject HttpClient Http
+
+<PageTitle>Personagens de Demon Slayer</PageTitle>
+
+<main>
+    <h1>Personagens de Demon Slayer</h1>
+    <p>Conheça os personagens retornados pela API.</p>
+
+    <nav aria-label="Paginação">
+        <button disabled="@(carregando || pagina == 1)" @onclick="() => Carregar(pagina - 1)">Anterior</button>
+        <span>Página @pagina</span>
+        <button disabled="@(carregando || personagens.Count == 0)" @onclick="() => Carregar(pagina + 1)">Próxima</button>
+    </nav>
+
+    @if (carregando)
+    {
+        <p role="status">Carregando personagens...</p>
+    }
+    else if (erro is not null)
+    {
+        <p role="alert">@erro</p>
+        <button @onclick="() => Carregar(pagina)">Tentar novamente</button>
+    }
+    else if (personagens.Count == 0)
+    {
+        <p>Nenhum personagem nesta página. Use Anterior para voltar.</p>
+    }
+    else
+    {
+        <section class="personagens" aria-label="Personagens">
+            @foreach (var personagem in personagens)
+            {
+                <article>
+                    @if (!string.IsNullOrWhiteSpace(Campo(personagem, "img")))
+                    {
+                        <img src="@Campo(personagem, "img")" alt="@Campo(personagem, "name")" loading="lazy" />
+                    }
+                    <h2>@Texto(personagem, "name")</h2>
+                    <p><strong>Idade:</strong> @Texto(personagem, "age")</p>
+                    <p><strong>Raça:</strong> @Texto(personagem, "race")</p>
+                    <p><strong>Citação:</strong> @Texto(personagem, "quote")</p>
+                </article>
+            }
+        </section>
+    }
+</main>
+
+@code {
+    private List<JsonElement> personagens = [];
+    private int pagina = 1;
+    private bool carregando;
+    private string? erro;
+
+    protected override Task OnInitializedAsync() => Carregar(1);
+
+    private async Task Carregar(int numero)
+    {
+        carregando = true;
+        erro = null;
+        try
+        {
+            using var resposta = await Http.GetAsync($"https://www.demonslayer-api.com/api/v1/characters?page={numero}");
+            resposta.EnsureSuccessStatusCode();
+            using var documento = JsonDocument.Parse(await resposta.Content.ReadAsStringAsync());
+            var lista = documento.RootElement;
+            if (lista.ValueKind == JsonValueKind.Object)
+            {
+                // A API pode envolver a lista paginada em um objeto.
+                foreach (var chave in new[] { "content", "data", "results", "characters" })
+                {
+                    if (lista.TryGetProperty(chave, out var valor) && valor.ValueKind == JsonValueKind.Array)
+                    {
+                        lista = valor;
+                        break;
+                    }
+                }
+            }
+            if (lista.ValueKind != JsonValueKind.Array)
+                throw new JsonException("A resposta não contém uma lista de personagens.");
+
+            personagens = lista.EnumerateArray().Select(item => item.Clone()).ToList();
+            pagina = numero;
+        }
+        catch (Exception ex) when (ex is HttpRequestException or JsonException or TaskCanceledException)
+        {
+            erro = "Não foi possível carregar os personagens. Verifique sua conexão e tente novamente.";
+        }
+        finally
+        {
+            carregando = false;
+        }
+    }
+
+    private static string Campo(JsonElement personagem, string nome) =>
+        personagem.ValueKind == JsonValueKind.Object && personagem.TryGetProperty(nome, out var valor)
+            && valor.ValueKind != JsonValueKind.Null ? valor.ToString() : "";
+
+    private static string Texto(JsonElement personagem, string nome) =>
+        string.IsNullOrWhiteSpace(Campo(personagem, nome)) ? "Não informado" : Campo(personagem, nome);
+}
